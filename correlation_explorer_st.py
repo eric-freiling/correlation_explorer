@@ -3,10 +3,6 @@ from __future__ import annotations
 import pandas as pd
 import numpy as np
 import streamlit as st
-from collections import defaultdict
-from typing import Dict, List, Tuple
-from urllib.parse import urlparse
-import boto3
 import plotly.graph_objects as go
 #import statsmodels.api as sm
 
@@ -15,7 +11,8 @@ import plotly.graph_objects as go
 # =========================
 
 DEFAULT_LABS = "snapshots/labs.csv"
-DEFAULT_TRACKERS = "snapshots/trackers.csv"
+DEFAULT_TRACKERS1 = "snapshots/trackers1.csv"
+DEFAULT_TRACKERS2 = "snapshots/trackers2.csv"
 DEFAULT_SURVEYS = "snapshots/surveys.csv"
 DEFAULT_DEFINITIONS = "snapshots/defs.csv"
 
@@ -51,22 +48,6 @@ st.logo(
 # =========================
 # Utilities
 # =========================
-def sanitize_ndarrays(df: pd.DataFrame) -> pd.DataFrame:
-    # if df is None or df.empty:
-    #     return df
-    # df = df.copy()
-    # for c in df.select_dtypes(include=["object"]).columns:
-    #     # quick probe to avoid scanning the whole column
-    #     head = df[c].head(200).tolist()
-    #     if not any(isinstance(v, np.ndarray) for v in head):
-    #         continue
-    #     df[c] = df[c].apply(
-    #         lambda x: (
-    #             x.tolist() if isinstance(x, np.ndarray)
-    #             else (x.item() if hasattr(x, "item") else x)
-    #         )
-    #     )
-    return df
 
 def _mark_corr_dirty():
     st.session_state["corr_ready"]  = False
@@ -75,7 +56,7 @@ def _mark_corr_dirty():
 
 def get_all_orgs():
     all_orgs = []
-    df = sanitize_ndarrays(pd.read_csv(DEFAULT_LABS))
+    df = pd.read_csv(DEFAULT_LABS)
     all_orgs = list(df['org_id'].unique())
     all_orgs.sort()
     # all_orgs = [
@@ -407,14 +388,16 @@ with st.sidebar.form("load_form", clear_on_submit=False):
     load = st.form_submit_button("📥 Load data", use_container_width=True)  # never disabled
 
 def load_org(org: str):
-    labs_raw     = sanitize_ndarrays(read_csv_org(DEFAULT_LABS, org))
-    trackers_raw = sanitize_ndarrays(read_csv_org(DEFAULT_TRACKERS, org))
-    surveys_raw  = sanitize_ndarrays(read_csv_org(DEFAULT_SURVEYS, org))
+    labs_raw     = read_csv_org(DEFAULT_LABS, org)
+    trackers_raw1 = read_csv_org(DEFAULT_TRACKERS1, org)
+    trackers_raw2 = read_csv_org(DEFAULT_TRACKERS2, org)
+    trackers_raw = pd.concat([trackers_raw1, trackers_raw2])
+    surveys_raw  = read_csv_org(DEFAULT_SURVEYS, org)
     for df in (labs_raw, trackers_raw, surveys_raw):
         df.columns = [c.lower() for c in df.columns]
         if "org_id" not in df:
             df["org_id"] = org
-    defs_df = sanitize_ndarrays(load_lab_definitions_csv(DEFAULT_DEFINITIONS))
+    defs_df = load_lab_definitions_csv(DEFAULT_DEFINITIONS)
     labs_enriched = enrich_and_filter_labs(labs_raw, defs_df)
     labs     = adapt_labs(labs_enriched)
     trackers = filter_trackers_minimal(adapt_trackers(trackers_raw))
@@ -554,18 +537,15 @@ def _cat_labs(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 def _cat_surveys(df: pd.DataFrame) -> pd.DataFrame:
+    # one row per survey_id, with a simple label that is the ID itself
     out = (
         df.groupby("survey_id", dropna=False)
-          .agg(n_subjects=("subject_id", "nunique"),
-               label=("display_name", _first_non_null))
+          .agg(n_subjects=("subject_id", "nunique"))
           .reset_index()
     )
-    base_label = np.where(out["label"].notna() & (out["label"].astype(str).str.strip() != ""),
-                          out["label"].astype(str),
-                          out["survey_id"].astype(str))
-    out["label"] = base_label + " · n=" + out["n_subjects"].astype(str)
-    out = out.sort_values(by="label").reset_index(drop=True)
-    return out
+    # what appears in the survey selectbox
+    out["label_id"] = out["survey_id"].astype(str) + " · n=" + out["n_subjects"].astype(str)
+    return out[["survey_id", "label_id", "n_subjects"]]
 
 def _cat_tracker_types(df: pd.DataFrame) -> pd.DataFrame:
     t = df.copy()
@@ -707,7 +687,7 @@ if "fact" in st.session_state:
     cat_tracker_types = _cat_tracker_types(trackers)    # tracker_type
 
     lab_options     = cat_labs[["lab_id","label"]].to_dict("records")
-    survey_options  = cat_surveys[["survey_id","label"]].to_dict("records")
+    survey_options  = cat_surveys[["survey_id","label_id"]].to_dict("records")
     trktype_options = cat_tracker_types[["tracker_type","label"]].to_dict("records")
 
     SOURCE_LABELS = {"labs":"Labs", "surveys":"Surveys", "trackers":"Trackers"}
@@ -735,7 +715,7 @@ if "fact" in st.session_state:
         rec_a = st.sidebar.selectbox(
             "Survey template",
             survey_options, index=None, placeholder="Pick a survey",
-            format_func=lambda o: o["label"] if o else "",
+            format_func=lambda o: o["label_id"] if o else "",
             key="select_A_surveys",
             on_change=_mark_corr_dirty
         )
@@ -774,7 +754,7 @@ if "fact" in st.session_state:
         rec_b = st.sidebar.selectbox(
             "Survey template",
             survey_options, index=None, placeholder="Pick a survey",
-            format_func=lambda o: o["label"] if o else "",
+            format_func=lambda o: o["label_id"] if o else "",
             key="select_B_surveys",
             on_change=_mark_corr_dirty
         )
