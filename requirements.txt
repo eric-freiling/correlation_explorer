@@ -1,3 +1,4 @@
-plotly
 pandas==2.2.2
 numpy==1.26.4
+plotly==6.4.0
+pytz==2024.1
